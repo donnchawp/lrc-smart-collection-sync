@@ -2,12 +2,10 @@
 -- Main entry point for the Smart Collection Sync plugin
 
 local LrTasks = import "LrTasks"
-local LrDialogs = import "LrDialogs"
 local LrApplicationView = import "LrApplicationView"
 
 local SyncEngine = require "SyncEngine"
 local ConfigDialog = require "ConfigDialog"
-local ProgressDialog = require "ProgressDialog"
 local Preferences = require "Preferences"
 
 local SmartCollectionSync = {}
@@ -29,26 +27,13 @@ function SmartCollectionSync.showConfig()
     end
 end
 
--- Manual sync with progress dialog
+-- Manual sync
 function SmartCollectionSync.syncNow()
     LrTasks.startAsyncTask(function()
         local selectedIds = Preferences.getSelectedIds()
         local destSetName = Preferences.get("destinationSetName")
 
-        local progress = ProgressDialog.create("Syncing Smart Collections")
-
-        if #selectedIds == 0 then
-            progress:update("Cleaning up...", 0, 1)
-        end
-
-        local results = SyncEngine.runFullSync(selectedIds, destSetName,
-            function(name, current, total)
-                progress:update("Syncing: " .. name, current, total)
-                return not progress:isCanceled()
-            end)
-
-        progress:done()
-
+        SyncEngine.runFullSync(selectedIds, destSetName, nil)
         Preferences.set("lastSyncTime", os.time())
     end)
 end
@@ -76,8 +61,11 @@ function SmartCollectionSync.startBackgroundSync()
             local skipSync = inDevelop and noSyncInDevelop
 
             if #selectedIds > 0 and not skipSync then
-                SyncEngine.runFullSync(selectedIds, destSetName, nil)
-                Preferences.set("lastSyncTime", os.time())
+                -- Wrap in pcall to prevent errors from breaking the loop
+                pcall(function()
+                    SyncEngine.runFullSync(selectedIds, destSetName, nil)
+                    Preferences.set("lastSyncTime", os.time())
+                end)
             end
 
             LrTasks.sleep(interval)
