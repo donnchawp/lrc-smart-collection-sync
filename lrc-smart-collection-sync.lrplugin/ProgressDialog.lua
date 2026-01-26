@@ -29,6 +29,7 @@ function ProgressDialog.create(title)
 
     -- Mark the progress as complete and close the dialog
     function dialog:done()
+        self.scope:setPortionComplete(1, 1)  -- Ensure 100% before closing
         self.scope:done()
     end
 
