@@ -2,7 +2,6 @@ local LrDialogs = import "LrDialogs"
 local LrView = import "LrView"
 local LrBinding = import "LrBinding"
 local LrFunctionContext = import "LrFunctionContext"
-local LrProgressScope = import "LrProgressScope"
 
 local SyncEngine = require "SyncEngine"
 local Preferences = require "Preferences"
@@ -14,14 +13,11 @@ local ConfigDialog = {}
 function ConfigDialog.showDialog()
     local result = nil
 
-    -- Load collections - this can be slow on large catalogs
-    local loadProgress = LrProgressScope({ title = "Loading Smart Collections (please wait)..." })
-    loadProgress:setIndeterminate()
+    -- Show toast while loading (can be slow on large catalogs)
+    LrDialogs.showBezel("Loading Smart Collections...")
 
     local smartColls = SyncEngine.getAllSmartCollections()
     local selectedIds = Preferences.getSelectedIds()
-
-    loadProgress:done()
 
     LrFunctionContext.callWithContext("ConfigDialog", function(context)
         local f = LrView.osFactory()
