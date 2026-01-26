@@ -2,6 +2,7 @@
 -- Main entry point for the Smart Collection Sync plugin
 
 local LrTasks = import "LrTasks"
+local LrDialogs = import "LrDialogs"
 local LrApplicationView = import "LrApplicationView"
 
 local SyncEngine = require "SyncEngine"
@@ -40,21 +41,28 @@ function SmartCollectionSync.syncNow()
             progress:update("Cleaning up...", 0, 1)
         end
 
-        SyncEngine.runFullSync(selectedIds, destSetName,
+        local results = SyncEngine.runFullSync(selectedIds, destSetName,
             function(name, current, total)
                 progress:update("Syncing: " .. name, current, total)
                 return not progress:isCanceled()
             end)
 
         progress:done()
+
         Preferences.set("lastSyncTime", os.time())
     end)
 end
 
 -- Start background sync task
 function SmartCollectionSync.startBackgroundSync()
-    -- Just start a new task - the while loop will handle duplicates gracefully
-    -- since they all check the same autoSyncEnabled flag
+    -- Use a preference flag to track if background sync is running
+    -- (module-local variables don't persist reliably across reloads)
+    if Preferences.get("_backgroundSyncRunning") then
+        return -- Already running
+    end
+
+    Preferences.set("_backgroundSyncRunning", true)
+
     LrTasks.startAsyncTask(function()
         while Preferences.get("autoSyncEnabled") do
             local selectedIds = Preferences.getSelectedIds()
@@ -68,25 +76,28 @@ function SmartCollectionSync.startBackgroundSync()
             local skipSync = inDevelop and noSyncInDevelop
 
             if #selectedIds > 0 and not skipSync then
-                pcall(function()
-                    SyncEngine.runFullSync(selectedIds, destSetName, nil)
-                    Preferences.set("lastSyncTime", os.time())
-                end)
+                SyncEngine.runFullSync(selectedIds, destSetName, nil)
+                Preferences.set("lastSyncTime", os.time())
             end
 
             LrTasks.sleep(interval)
         end
+        Preferences.set("_backgroundSyncRunning", false)
     end)
 end
 
 -- Stop background sync
 function SmartCollectionSync.stopBackgroundSync()
     Preferences.set("autoSyncEnabled", false)
-    -- Task will exit on next loop iteration when it checks autoSyncEnabled
+    Preferences.set("_backgroundSyncRunning", false)
+    -- Task will exit on next loop iteration
 end
 
 -- Plugin initialization (called on LrInitPlugin)
 function SmartCollectionSync.init()
+    -- Clear stale flag from previous session/crash
+    Preferences.set("_backgroundSyncRunning", false)
+
     if Preferences.get("autoSyncEnabled") then
         SmartCollectionSync.startBackgroundSync()
     end
