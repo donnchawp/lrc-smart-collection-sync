@@ -18,6 +18,8 @@ function ConfigDialog.showDialog()
 
     local smartColls = SyncEngine.getAllSmartCollections()
     local selectedIds = Preferences.getSelectedIds()
+    local sizes = Preferences.get("collectionSizes") or {}
+    local limit = SyncEngine.LARGE_COLLECTION_SIZE
 
     LrFunctionContext.callWithContext("ConfigDialog", function(context)
         local f = LrView.osFactory()
@@ -45,7 +47,7 @@ function ConfigDialog.showDialog()
             props[propName] = selectedLookup[id] == true
 
             table.insert(checkboxItems, f:checkbox {
-                title = sc:getName(),
+                title = ConfigDialog.getCollectionLabel(sc:getName(), sizes[tostring(id)], limit),
                 value = LrView.bind(propName),
             })
         end
@@ -115,6 +117,11 @@ function ConfigDialog.showDialog()
                 value = LrView.bind("autoSyncEnabled"),
             },
 
+            f:static_text {
+                title = "Auto-sync skips collections over " .. ConfigDialog.formatCount(limit)
+                    .. " photos. Use Sync Now for those.",
+            },
+
             f:checkbox {
                 title = "No sync while in Develop",
                 value = LrView.bind("noSyncInDevelop"),
@@ -168,6 +175,26 @@ function ConfigDialog.showDialog()
     end)
 
     return result
+end
+
+-- Format a count with thousands separators: 70561 -> "70,561"
+function ConfigDialog.formatCount(n)
+    local s = tostring(math.floor(n))
+    local formatted
+    repeat
+        s, formatted = s:gsub("^(%d+)(%d%d%d)", "%1,%2")
+    until formatted == 0
+    return s
+end
+
+-- Checkbox label for a smart collection, warning when it is too large to auto-sync.
+-- size is the photo count from the last sync, or nil if never synced.
+function ConfigDialog.getCollectionLabel(name, size, limit)
+    if size and size > limit then
+        return name .. " (" .. ConfigDialog.formatCount(size)
+            .. " photos: too large for auto-sync, use Sync Now)"
+    end
+    return name
 end
 
 -- Get status text based on selection count

@@ -169,6 +169,19 @@ end)
 -- Spec: "Last sync: 2 minutes ago"
 -- ============================================================================
 
+test("getCollectionLabel returns the plain name when size is unknown", function()
+    assert_eq(ConfigDialog.getCollectionLabel("Picks", nil, 10000), "Picks")
+end)
+
+test("getCollectionLabel returns the plain name at or under the limit", function()
+    assert_eq(ConfigDialog.getCollectionLabel("Picks", 10000, 10000), "Picks")
+end)
+
+test("getCollectionLabel warns for collections over the limit", function()
+    assert_eq(ConfigDialog.getCollectionLabel("Shared", 70561, 10000),
+        "Shared (70,561 photos: too large for auto-sync, use Sync Now)")
+end)
+
 test("getLastSyncText returns 'Never' when no lastSyncTime set", function()
     resetMocks()
     mockPrefs.lastSyncTime = nil

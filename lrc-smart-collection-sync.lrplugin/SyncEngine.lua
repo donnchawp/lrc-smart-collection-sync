@@ -6,6 +6,11 @@ local SyncEngine = {}
 -- Batch size for photo operations to avoid long catalog locks
 local BATCH_SIZE = 100
 
+-- Auto-sync skips smart collections bigger than this. The SDK has no cheap
+-- way to count or detect changes, so every pass loads every photo; on large
+-- collections that is too slow to repeat in the background.
+SyncEngine.LARGE_COLLECTION_SIZE = 10000
+
 -- Helper: recursively find all smart collections in a collection set
 local function findSmartCollectionsInSet(collectionSet, results)
     -- Check child collections
@@ -85,7 +90,7 @@ function SyncEngine.getOrCreateMirror(smartColl, destSet)
 end
 
 -- Sync a single smart collection to its mirror
--- Returns {added = count, removed = count}
+-- Returns {added = count, removed = count, size = photos in smart collection}
 function SyncEngine.syncCollection(smartColl, mirrorColl)
     local catalog = LrApplication.activeCatalog()
 
@@ -151,12 +156,19 @@ function SyncEngine.syncCollection(smartColl, mirrorColl)
         end
     end
 
-    return { added = #toAdd, removed = #toRemove }
+    return { added = #toAdd, removed = #toRemove, size = #smartPhotos }
 end
 
 -- Run full sync for all selected collections
--- progressCallback receives (collectionName, currentIndex, totalCount)
-function SyncEngine.runFullSync(selectedIds, destSetName, progressCallback)
+-- progressCallback receives (collectionName, currentIndex, totalCount) and
+-- may return false to stop before the next collection.
+-- options (optional):
+--   skipLarge  - skip collections whose known size is over LARGE_COLLECTION_SIZE
+--   knownSizes - sizes from earlier syncs, keyed by tostring(localIdentifier)
+-- results.sizes holds the size of every collection synced in this run.
+function SyncEngine.runFullSync(selectedIds, destSetName, progressCallback, options)
+    options = options or {}
+    local knownSizes = options.knownSizes or {}
     local destSet = SyncEngine.getOrCreateDestinationSet(destSetName)
     local allSmartColls = SyncEngine.getAllSmartCollections()
 
@@ -164,6 +176,9 @@ function SyncEngine.runFullSync(selectedIds, destSetName, progressCallback)
         totalAdded = 0,
         totalRemoved = 0,
         collectionsProcessed = 0,
+        sizes = {},
+        skipped = {},
+        canceled = false,
     }
 
     -- Build lookup of selected IDs for O(1) checks
@@ -187,20 +202,31 @@ function SyncEngine.runFullSync(selectedIds, destSetName, progressCallback)
         if selectedLookup[id] then
             current = current + 1
 
-            if progressCallback then
-                progressCallback(smartColl:getName(), current, total)
+            if progressCallback and progressCallback(smartColl:getName(), current, total) == false then
+                results.canceled = true
+                break
             end
 
-            local mirror = SyncEngine.getOrCreateMirror(smartColl, destSet)
-            local result = SyncEngine.syncCollection(smartColl, mirror)
+            local knownSize = knownSizes[id]
+            if options.skipLarge and knownSize and knownSize > SyncEngine.LARGE_COLLECTION_SIZE then
+                table.insert(results.skipped, smartColl:getName())
+            else
+                local mirror = SyncEngine.getOrCreateMirror(smartColl, destSet)
+                local result = SyncEngine.syncCollection(smartColl, mirror)
 
-            results.totalAdded = results.totalAdded + result.added
-            results.totalRemoved = results.totalRemoved + result.removed
-            results.collectionsProcessed = current
+                results.totalAdded = results.totalAdded + result.added
+                results.totalRemoved = results.totalRemoved + result.removed
+                results.sizes[id] = result.size
+                results.collectionsProcessed = results.collectionsProcessed + 1
 
-            -- Yield between collections to keep Lightroom responsive
-            LrTasks.yield()
+                -- Yield between collections to keep Lightroom responsive
+                LrTasks.yield()
+            end
         end
+    end
+
+    if results.canceled then
+        return results
     end
 
     -- Clean up orphaned mirrors (smart collection was deleted)

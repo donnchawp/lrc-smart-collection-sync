@@ -12,8 +12,8 @@ This plugin automatically creates and maintains "mirror" collections that stay i
 
 ## Features
 
-- **Automatic background sync** - Runs at a configurable interval (10-300 seconds)
-- **Manual sync** - Trigger immediate sync via menu command
+- **Automatic background sync** - Optional, runs at a configurable interval (10-300 seconds); skips smart collections over 10,000 photos
+- **Manual sync** - Trigger immediate sync of every selected collection via menu command
 - **Two-way mirror** - Both additions and removals are synced
 - **Develop module awareness** - Option to pause sync while editing photos
 - **Clean organization** - All mirror collections placed in a dedicated collection set
@@ -49,6 +49,14 @@ This plugin automatically creates and maintains "mirror" collections that stay i
 
 - **Enable auto-sync** - Automatically sync at the configured interval
 - **No sync while in Develop** - Pause syncing while editing photos to avoid disruption
+
+### Large collections
+
+The Lightroom SDK has no cheap way to count a smart collection or tell whether it has changed, so every sync loads every photo in the smart collection and its mirror. That is fine for small collections but too slow to repeat every few seconds on large ones.
+
+Each sync records how many photos each smart collection has. Auto-sync skips any collection last seen with more than 10,000 photos, without loading it, and the configuration dialog marks those collections. **Sync Now** always syncs every selected collection and refreshes the recorded sizes, so a collection that shrinks below the limit goes back to auto-sync.
+
+Splitting a large smart collection into several smaller ones doesn't help: each pass would still load all of their photos.
 
 ## How It Works
 

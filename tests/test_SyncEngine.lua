@@ -422,6 +422,117 @@ test("runFullSync returns correct totals",
     "Should return correct added/removed totals")
 
 -- ============================================
+-- Test Suite: runFullSync size limits
+-- Auto-sync skips smart collections last seen with more than
+-- LARGE_COLLECTION_SIZE photos, without loading their photos
+-- ============================================
+
+-- Wrap getPhotos so a test can tell whether a collection was loaded
+local function trackLoads(coll)
+    local getPhotos = coll.getPhotos
+    coll._loads = 0
+    function coll:getPhotos()
+        self._loads = self._loads + 1
+        return getPhotos(self)
+    end
+    return coll
+end
+
+test("LARGE_COLLECTION_SIZE is 10000",
+    SyncEngine.LARGE_COLLECTION_SIZE == 10000,
+    "Expected 10000, got " .. tostring(SyncEngine.LARGE_COLLECTION_SIZE))
+
+test("runFullSync records the size of each synced collection",
+    (function()
+        resetMocks()
+        SyncEngine = dofile(pluginDir .. "SyncEngine.lua")
+        local sc1 = createMockCollection("5 Star", {createMockPhoto(1), createMockPhoto(2)})
+        sc1.localIdentifier = 101
+        mockSmartCollections = {sc1}
+
+        local results = SyncEngine.runFullSync({101}, "Smart Collection Sync", nil)
+
+        return results.sizes["101"] == 2
+    end)(),
+    "Should record size 2 for collection 101")
+
+test("runFullSync with skipLarge skips collections known to be large without loading them",
+    (function()
+        resetMocks()
+        SyncEngine = dofile(pluginDir .. "SyncEngine.lua")
+        local big = trackLoads(createMockCollection("Big", {createMockPhoto(1)}))
+        big.localIdentifier = 101
+        local small = trackLoads(createMockCollection("Small", {createMockPhoto(2)}))
+        small.localIdentifier = 102
+        mockSmartCollections = {big, small}
+
+        local results = SyncEngine.runFullSync({101, 102}, "Smart Collection Sync", nil, {
+            skipLarge = true,
+            knownSizes = { ["101"] = SyncEngine.LARGE_COLLECTION_SIZE + 1, ["102"] = 5 },
+        })
+
+        return big._loads == 0 and small._loads == 1
+            and #results.skipped == 1 and results.skipped[1] == "Big"
+            and results.sizes["101"] == nil and results.sizes["102"] == 1
+    end)(),
+    "Big should be skipped and not loaded; Small should sync")
+
+test("runFullSync with skipLarge syncs collections of unknown size and records them",
+    (function()
+        resetMocks()
+        SyncEngine = dofile(pluginDir .. "SyncEngine.lua")
+        local sc = trackLoads(createMockCollection("New", {createMockPhoto(1)}))
+        sc.localIdentifier = 101
+        mockSmartCollections = {sc}
+
+        local results = SyncEngine.runFullSync({101}, "Smart Collection Sync", nil, {
+            skipLarge = true,
+            knownSizes = {},
+        })
+
+        return sc._loads == 1 and results.sizes["101"] == 1 and #results.skipped == 0
+    end)(),
+    "Unknown size should be synced and recorded")
+
+test("runFullSync without skipLarge syncs large collections",
+    (function()
+        resetMocks()
+        SyncEngine = dofile(pluginDir .. "SyncEngine.lua")
+        local big = trackLoads(createMockCollection("Big", {createMockPhoto(1)}))
+        big.localIdentifier = 101
+        mockSmartCollections = {big}
+
+        local results = SyncEngine.runFullSync({101}, "Smart Collection Sync", nil, {
+            knownSizes = { ["101"] = SyncEngine.LARGE_COLLECTION_SIZE + 1 },
+        })
+
+        return big._loads == 1 and #results.skipped == 0 and results.sizes["101"] == 1
+    end)(),
+    "Manual sync should sync and re-measure large collections")
+
+test("runFullSync stops when the progress callback returns false",
+    (function()
+        resetMocks()
+        SyncEngine = dofile(pluginDir .. "SyncEngine.lua")
+        local sc1 = trackLoads(createMockCollection("First", {createMockPhoto(1)}))
+        sc1.localIdentifier = 101
+        local sc2 = trackLoads(createMockCollection("Second", {createMockPhoto(2)}))
+        sc2.localIdentifier = 102
+        mockSmartCollections = {sc1, sc2}
+
+        local calls = 0
+        local results = SyncEngine.runFullSync({101, 102}, "Smart Collection Sync",
+            function()
+                calls = calls + 1
+                return calls < 2 -- allow the first collection, stop before the second
+            end)
+
+        return results.canceled == true and sc1._loads == 1 and sc2._loads == 0
+            and results.collectionsProcessed == 1
+    end)(),
+    "Should stop before the second collection")
+
+-- ============================================
 -- Test Suite: cleanupOrphanedMirrors
 -- Spec: "When a smart collection is deleted → its mirror collection is also deleted"
 -- ============================================
