@@ -12,6 +12,19 @@ local Preferences = require "Preferences"
 
 local SmartCollectionSync = {}
 
+-- Merge sizes measured in a sync into the stored sizes. Assign a new table:
+-- LrPrefs only saves values assigned to a top-level key.
+local function recordSizes(sizes)
+    local stored = {}
+    for id, size in pairs(Preferences.get("collectionSizes") or {}) do
+        stored[id] = size
+    end
+    for id, size in pairs(sizes or {}) do
+        stored[id] = size
+    end
+    Preferences.set("collectionSizes", stored)
+end
+
 -- Show configuration dialog
 function SmartCollectionSync.showConfig()
     local result = ConfigDialog.showDialog()
@@ -49,6 +62,8 @@ function SmartCollectionSync.syncNow()
 
         progress:done()
 
+        -- Sync Now syncs large collections too, so it refreshes their sizes
+        recordSizes(results.sizes)
         Preferences.set("lastSyncTime", os.time())
     end)
 end
@@ -63,8 +78,12 @@ function SmartCollectionSync.startBackgroundSync()
 
     Preferences.set("_backgroundSyncRunning", true)
 
+    local function stopRequested()
+        return Preferences.get("_stopRequested") == true
+    end
+
     LrTasks.startAsyncTask(function()
-        while Preferences.get("autoSyncEnabled") do
+        while Preferences.get("autoSyncEnabled") and not stopRequested() do
             local selectedIds = Preferences.getSelectedIds()
             local destSetName = Preferences.get("destinationSetName")
             local interval = Preferences.get("syncInterval") or 30
@@ -76,7 +95,10 @@ function SmartCollectionSync.startBackgroundSync()
             local skipSync = inDevelop and noSyncInDevelop
 
             if #selectedIds > 0 and not skipSync then
-                SyncEngine.runFullSync(selectedIds, destSetName, nil)
+                local results = SyncEngine.runFullSync(selectedIds, destSetName,
+                    function() return not stopRequested() end,
+                    { skipLarge = true, knownSizes = Preferences.get("collectionSizes") })
+                recordSizes(results.sizes)
                 Preferences.set("lastSyncTime", os.time())
             end
 
@@ -95,8 +117,9 @@ end
 
 -- Plugin initialization (called on LrInitPlugin)
 function SmartCollectionSync.init()
-    -- Clear stale flag from previous session/crash
+    -- Clear stale flags from previous session/crash
     Preferences.set("_backgroundSyncRunning", false)
+    Preferences.set("_stopRequested", false)
 
     if Preferences.get("autoSyncEnabled") then
         SmartCollectionSync.startBackgroundSync()
@@ -104,8 +127,10 @@ function SmartCollectionSync.init()
 end
 
 -- Plugin shutdown (called on LrShutdownPlugin)
+-- Stops a running pass at the next collection so quitting isn't held up.
+-- Leaves autoSyncEnabled alone so auto-sync resumes on the next launch.
 function SmartCollectionSync.shutdown()
-    SmartCollectionSync.stopBackgroundSync()
+    Preferences.set("_stopRequested", true)
 end
 
 return SmartCollectionSync

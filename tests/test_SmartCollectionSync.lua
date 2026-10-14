@@ -52,6 +52,10 @@ local backgroundSyncStarted = false
 local dialogShown = false
 local asyncTasksStarted = {}
 local showConfigResult = "ok"
+local syncCalls = {}
+local syncResultSizes = {}
+local onSleep = function() end
+local progressCanceled = false
 
 -- Mock the global import function for LR SDK modules
 _G.import = function(name)
@@ -61,8 +65,10 @@ _G.import = function(name)
                 table.insert(asyncTasksStarted, fn)
                 return {} -- task handle
             end,
-            sleep = function(seconds) end,
+            sleep = function(seconds) onSleep() end,
         }
+    elseif name == "LrApplicationView" then
+        return { getCurrentModuleName = function() return "library" end }
     elseif name == "LrDialogs" then
         return {
             message = function(title, msg, style) end,
@@ -123,8 +129,10 @@ _G.require = function(name)
     if name == "SyncEngine" then
         return {
             getAllSmartCollections = function() return {} end,
-            runFullSync = function(selectedIds, destSetName, callback)
-                return { totalAdded = 0, totalRemoved = 0, collectionsProcessed = 0 }
+            runFullSync = function(selectedIds, destSetName, callback, options)
+                table.insert(syncCalls, { callback = callback, options = options })
+                return { totalAdded = 0, totalRemoved = 0, collectionsProcessed = 0,
+                         sizes = syncResultSizes, skipped = {} }
             end,
         }
     elseif name == "ConfigDialog" then
@@ -141,7 +149,7 @@ _G.require = function(name)
             create = function(title)
                 return {
                     update = function(self, msg, current, total, added, removed) end,
-                    isCanceled = function(self) return false end,
+                    isCanceled = function(self) return progressCanceled end,
                     done = function(self) end,
                 }
             end,
@@ -182,6 +190,10 @@ local function resetMocks()
     dialogShown = false
     asyncTasksStarted = {}
     showConfigResult = "ok"
+    syncCalls = {}
+    syncResultSizes = {}
+    onSleep = function() end
+    progressCanceled = false
 end
 
 -- Load the module under test
@@ -270,13 +282,107 @@ end)
 -- Spec: Plugin should clean up on shutdown
 -- ============================================================================
 
-test("shutdown disables auto-sync to stop background task", function()
+test("shutdown stops the background task without turning auto-sync off", function()
     resetMocks()
     mockPrefs.autoSyncEnabled = true
     SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
 
     SmartCollectionSync.shutdown()
-    assert_false(mockPrefs.autoSyncEnabled, "Should disable auto-sync on shutdown")
+    assert_true(mockPrefs.autoSyncEnabled, "Auto-sync setting must survive a restart")
+    assert_true(mockPrefs._stopRequested, "Should request the running task to stop")
+end)
+
+test("init clears a stop request left by the previous session", function()
+    resetMocks()
+    mockPrefs._stopRequested = true
+    SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
+
+    SmartCollectionSync.init()
+    assert_eq(mockPrefs._stopRequested, false)
+end)
+
+-- ============================================================================
+-- Tests for collection size limits
+-- Auto-sync skips large collections; Sync Now syncs everything and
+-- refreshes the recorded sizes
+-- ============================================================================
+
+test("background pass skips large collections and records sizes", function()
+    resetMocks()
+    mockPrefs.autoSyncEnabled = true
+    mockPrefs.selectedCollectionIds = { 101 }
+    mockPrefs.collectionSizes = { ["202"] = 50000 }
+    syncResultSizes = { ["101"] = 12 }
+    onSleep = function() mockPrefs.autoSyncEnabled = false end -- one pass only
+    SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
+
+    SmartCollectionSync.startBackgroundSync()
+    asyncTasksStarted[1]()
+
+    assert_eq(#syncCalls, 1, "Should run one sync pass")
+    assert_true(syncCalls[1].options.skipLarge, "Background pass should skip large collections")
+    assert_eq(syncCalls[1].options.knownSizes["202"], 50000)
+    assert_eq(mockPrefs.collectionSizes["101"], 12, "Should record new size")
+    assert_eq(mockPrefs.collectionSizes["202"], 50000, "Should keep existing sizes")
+end)
+
+test("background pass stops when shutdown is requested", function()
+    resetMocks()
+    mockPrefs.autoSyncEnabled = true
+    mockPrefs.selectedCollectionIds = { 101 }
+    SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
+
+    SmartCollectionSync.startBackgroundSync()
+    SmartCollectionSync.shutdown()
+    asyncTasksStarted[1]()
+
+    assert_eq(#syncCalls, 0, "Should not start a pass after shutdown")
+end)
+
+test("background pass progress callback returns false after shutdown", function()
+    resetMocks()
+    mockPrefs.autoSyncEnabled = true
+    mockPrefs.selectedCollectionIds = { 101 }
+    onSleep = function() mockPrefs.autoSyncEnabled = false end
+    SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
+
+    SmartCollectionSync.startBackgroundSync()
+    asyncTasksStarted[1]()
+
+    local callback = syncCalls[1].callback
+    assert_true(callback("x", 1, 1), "Should continue while running")
+    SmartCollectionSync.shutdown()
+    assert_false(callback("x", 1, 1), "Should stop once shutdown is requested")
+end)
+
+test("syncNow syncs large collections too and records sizes", function()
+    resetMocks()
+    mockPrefs.selectedCollectionIds = { 101 }
+    mockPrefs.collectionSizes = { ["101"] = 50000 }
+    syncResultSizes = { ["101"] = 9000 }
+    SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
+
+    SmartCollectionSync.syncNow()
+    asyncTasksStarted[1]()
+
+    assert_eq(#syncCalls, 1)
+    assert_true(not (syncCalls[1].options and syncCalls[1].options.skipLarge),
+        "Sync Now should not skip large collections")
+    assert_eq(mockPrefs.collectionSizes["101"], 9000, "Should refresh the recorded size")
+end)
+
+test("syncNow progress callback returns false when Cancel is clicked", function()
+    resetMocks()
+    mockPrefs.selectedCollectionIds = { 101 }
+    SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
+
+    SmartCollectionSync.syncNow()
+    asyncTasksStarted[1]()
+
+    local callback = syncCalls[1].callback
+    assert_true(callback("x", 1, 1), "Should continue before Cancel")
+    progressCanceled = true
+    assert_false(callback("x", 1, 1), "Should stop after Cancel")
 end)
 
 -- ============================================================================
