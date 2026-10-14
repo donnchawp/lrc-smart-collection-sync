@@ -145,6 +145,36 @@ test("setSelectedIds with empty table",
     "Empty table not handled correctly")
 
 -- ============================================
+-- Test Suite: Collection sizes
+-- ============================================
+
+test("getCollectionSizes defaults to an empty table",
+    (function()
+        mockPrefs.collectionSizes = nil
+        local sizes = Preferences.getCollectionSizes()
+        return type(sizes) == "table" and next(sizes) == nil
+    end)(),
+    "Expected empty table")
+
+test("recordCollectionSizes merges new sizes into stored ones",
+    (function()
+        mockPrefs.collectionSizes = { ["1"] = 10, ["2"] = 20 }
+        Preferences.recordCollectionSizes({ ["2"] = 25, ["3"] = 30 })
+        local s = Preferences.getCollectionSizes()
+        return s["1"] == 10 and s["2"] == 25 and s["3"] == 30
+    end)(),
+    "Sizes not merged correctly")
+
+test("recordCollectionSizes assigns a new table so LrPrefs saves it",
+    (function()
+        local before = { ["1"] = 10 }
+        mockPrefs.collectionSizes = before
+        Preferences.recordCollectionSizes({ ["2"] = 20 })
+        return mockPrefs.collectionSizes ~= before
+    end)(),
+    "Should assign a new table, not mutate the stored one")
+
+-- ============================================
 -- Test Suite: Values override defaults
 -- ============================================
 

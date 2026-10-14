@@ -125,14 +125,16 @@ end
 
 -- Mock require for dependencies
 local originalRequire = require
+local realSyncEngine = dofile("lrc-smart-collection-sync.lrplugin/SyncEngine.lua")
 _G.require = function(name)
     if name == "SyncEngine" then
         return {
             getAllSmartCollections = function() return {} end,
-            runFullSync = function(selectedIds, destSetName, callback, options)
-                table.insert(syncCalls, { callback = callback, options = options })
+            isTooLargeForAutoSync = realSyncEngine.isTooLargeForAutoSync,
+            runFullSync = function(selectedIds, destSetName, callback, shouldSync)
+                table.insert(syncCalls, { callback = callback, shouldSync = shouldSync })
                 return { totalAdded = 0, totalRemoved = 0, collectionsProcessed = 0,
-                         sizes = syncResultSizes, skipped = {} }
+                         sizes = syncResultSizes }
             end,
         }
     elseif name == "ConfigDialog" then
@@ -176,6 +178,15 @@ _G.require = function(name)
             end,
             setSelectedIds = function(ids)
                 mockPrefs.selectedCollectionIds = ids
+            end,
+            getCollectionSizes = function()
+                return mockPrefs.collectionSizes or {}
+            end,
+            recordCollectionSizes = function(sizes)
+                local stored = {}
+                for id, n in pairs(mockPrefs.collectionSizes or {}) do stored[id] = n end
+                for id, n in pairs(sizes) do stored[id] = n end
+                mockPrefs.collectionSizes = stored
             end,
         }
     end
@@ -320,8 +331,8 @@ test("background pass skips large collections and records sizes", function()
     asyncTasksStarted[1]()
 
     assert_eq(#syncCalls, 1, "Should run one sync pass")
-    assert_true(syncCalls[1].options.skipLarge, "Background pass should skip large collections")
-    assert_eq(syncCalls[1].options.knownSizes["202"], 50000)
+    assert_false(syncCalls[1].shouldSync("202"), "Background pass should skip large collections")
+    assert_true(syncCalls[1].shouldSync("101"), "Unknown sizes should sync")
     assert_eq(mockPrefs.collectionSizes["101"], 12, "Should record new size")
     assert_eq(mockPrefs.collectionSizes["202"], 50000, "Should keep existing sizes")
 end)
@@ -350,9 +361,25 @@ test("background pass progress callback returns false after shutdown", function(
     asyncTasksStarted[1]()
 
     local callback = syncCalls[1].callback
+    mockPrefs.autoSyncEnabled = true
     assert_true(callback("x", 1, 1), "Should continue while running")
     SmartCollectionSync.shutdown()
     assert_false(callback("x", 1, 1), "Should stop once shutdown is requested")
+end)
+
+test("background pass progress callback returns false after auto-sync is turned off", function()
+    resetMocks()
+    mockPrefs.autoSyncEnabled = true
+    mockPrefs.selectedCollectionIds = { 101 }
+    onSleep = function() mockPrefs.autoSyncEnabled = false end
+    SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
+
+    SmartCollectionSync.startBackgroundSync()
+    asyncTasksStarted[1]()
+
+    local callback = syncCalls[1].callback
+    mockPrefs.autoSyncEnabled = false
+    assert_false(callback("x", 1, 1), "Should stop once auto-sync is off")
 end)
 
 test("syncNow syncs large collections too and records sizes", function()
@@ -366,8 +393,7 @@ test("syncNow syncs large collections too and records sizes", function()
     asyncTasksStarted[1]()
 
     assert_eq(#syncCalls, 1)
-    assert_true(not (syncCalls[1].options and syncCalls[1].options.skipLarge),
-        "Sync Now should not skip large collections")
+    assert_eq(syncCalls[1].shouldSync, nil, "Sync Now should not skip large collections")
     assert_eq(mockPrefs.collectionSizes["101"], 9000, "Should refresh the recorded size")
 end)
 
