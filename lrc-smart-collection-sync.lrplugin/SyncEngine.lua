@@ -11,6 +11,11 @@ local BATCH_SIZE = 100
 -- collections that is too slow to repeat in the background.
 SyncEngine.LARGE_COLLECTION_SIZE = 10000
 
+-- size is the photo count from the last sync, or nil if never synced
+function SyncEngine.isTooLargeForAutoSync(size)
+    return size ~= nil and size > SyncEngine.LARGE_COLLECTION_SIZE
+end
+
 -- Helper: recursively find all smart collections in a collection set
 local function findSmartCollectionsInSet(collectionSet, results)
     -- Check child collections
@@ -162,13 +167,10 @@ end
 -- Run full sync for all selected collections
 -- progressCallback receives (collectionName, currentIndex, totalCount) and
 -- may return false to stop before the next collection.
--- options (optional):
---   skipLarge  - skip collections whose known size is over LARGE_COLLECTION_SIZE
---   knownSizes - sizes from earlier syncs, keyed by tostring(localIdentifier)
+-- shouldSync (optional) receives tostring(localIdentifier); collections it
+-- returns false for are skipped without loading their photos.
 -- results.sizes holds the size of every collection synced in this run.
-function SyncEngine.runFullSync(selectedIds, destSetName, progressCallback, options)
-    options = options or {}
-    local knownSizes = options.knownSizes or {}
+function SyncEngine.runFullSync(selectedIds, destSetName, progressCallback, shouldSync)
     local destSet = SyncEngine.getOrCreateDestinationSet(destSetName)
     local allSmartColls = SyncEngine.getAllSmartCollections()
 
@@ -177,8 +179,6 @@ function SyncEngine.runFullSync(selectedIds, destSetName, progressCallback, opti
         totalRemoved = 0,
         collectionsProcessed = 0,
         sizes = {},
-        skipped = {},
-        canceled = false,
     }
 
     -- Build lookup of selected IDs for O(1) checks
@@ -203,14 +203,10 @@ function SyncEngine.runFullSync(selectedIds, destSetName, progressCallback, opti
             current = current + 1
 
             if progressCallback and progressCallback(smartColl:getName(), current, total) == false then
-                results.canceled = true
-                break
+                return results
             end
 
-            local knownSize = knownSizes[id]
-            if options.skipLarge and knownSize and knownSize > SyncEngine.LARGE_COLLECTION_SIZE then
-                table.insert(results.skipped, smartColl:getName())
-            else
+            if not shouldSync or shouldSync(id) then
                 local mirror = SyncEngine.getOrCreateMirror(smartColl, destSet)
                 local result = SyncEngine.syncCollection(smartColl, mirror)
 
@@ -223,10 +219,6 @@ function SyncEngine.runFullSync(selectedIds, destSetName, progressCallback, opti
                 LrTasks.yield()
             end
         end
-    end
-
-    if results.canceled then
-        return results
     end
 
     -- Clean up orphaned mirrors (smart collection was deleted)

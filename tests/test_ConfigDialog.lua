@@ -80,6 +80,10 @@ _G.import = function(name)
                 fn({})
             end,
         }
+    elseif name == "LrStringUtils" then
+        return {
+            numberToStringWithSeparators = function(n) return "fmt(" .. n .. ")" end,
+        }
     elseif name == "LrPrefs" then
         return {
             prefsForPlugin = function()
@@ -102,12 +106,15 @@ end
 
 -- Mock require for dependencies
 local originalRequire = require
+local realSyncEngine = dofile("lrc-smart-collection-sync.lrplugin/SyncEngine.lua")
 _G.require = function(name)
     if name == "SyncEngine" then
         return {
             getAllSmartCollections = function()
                 return mockSmartCollections
             end,
+            LARGE_COLLECTION_SIZE = realSyncEngine.LARGE_COLLECTION_SIZE,
+            isTooLargeForAutoSync = realSyncEngine.isTooLargeForAutoSync,
         }
     elseif name == "Preferences" then
         return {
@@ -119,6 +126,9 @@ _G.require = function(name)
             end,
             getSelectedIds = function()
                 return mockPrefs.selectedCollectionIds or {}
+            end,
+            getCollectionSizes = function()
+                return mockPrefs.collectionSizes or {}
             end,
             setSelectedIds = function(ids)
                 mockPrefs.selectedCollectionIds = ids
@@ -170,16 +180,16 @@ end)
 -- ============================================================================
 
 test("getCollectionLabel returns the plain name when size is unknown", function()
-    assert_eq(ConfigDialog.getCollectionLabel("Picks", nil, 10000), "Picks")
+    assert_eq(ConfigDialog.getCollectionLabel("Picks", nil), "Picks")
 end)
 
 test("getCollectionLabel returns the plain name at or under the limit", function()
-    assert_eq(ConfigDialog.getCollectionLabel("Picks", 10000, 10000), "Picks")
+    assert_eq(ConfigDialog.getCollectionLabel("Picks", 10000), "Picks")
 end)
 
 test("getCollectionLabel warns for collections over the limit", function()
-    assert_eq(ConfigDialog.getCollectionLabel("Shared", 70561, 10000),
-        "Shared (70,561 photos: too large for auto-sync, use Sync Now)")
+    assert_eq(ConfigDialog.getCollectionLabel("Shared", 70561),
+        "Shared (fmt(70561) photos: too large for auto-sync, use Sync Now)")
 end)
 
 test("getLastSyncText returns 'Never' when no lastSyncTime set", function()

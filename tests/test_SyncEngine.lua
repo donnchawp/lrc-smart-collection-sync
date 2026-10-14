@@ -456,7 +456,7 @@ test("runFullSync records the size of each synced collection",
     end)(),
     "Should record size 2 for collection 101")
 
-test("runFullSync with skipLarge skips collections known to be large without loading them",
+test("runFullSync skips collections shouldSync rejects, without loading them",
     (function()
         resetMocks()
         SyncEngine = dofile(pluginDir .. "SyncEngine.lua")
@@ -466,49 +466,22 @@ test("runFullSync with skipLarge skips collections known to be large without loa
         small.localIdentifier = 102
         mockSmartCollections = {big, small}
 
-        local results = SyncEngine.runFullSync({101, 102}, "Smart Collection Sync", nil, {
-            skipLarge = true,
-            knownSizes = { ["101"] = SyncEngine.LARGE_COLLECTION_SIZE + 1, ["102"] = 5 },
-        })
+        local results = SyncEngine.runFullSync({101, 102}, "Smart Collection Sync", nil,
+            function(id) return id ~= "101" end)
 
         return big._loads == 0 and small._loads == 1
-            and #results.skipped == 1 and results.skipped[1] == "Big"
             and results.sizes["101"] == nil and results.sizes["102"] == 1
     end)(),
     "Big should be skipped and not loaded; Small should sync")
 
-test("runFullSync with skipLarge syncs collections of unknown size and records them",
-    (function()
-        resetMocks()
-        SyncEngine = dofile(pluginDir .. "SyncEngine.lua")
-        local sc = trackLoads(createMockCollection("New", {createMockPhoto(1)}))
-        sc.localIdentifier = 101
-        mockSmartCollections = {sc}
+test("isTooLargeForAutoSync is false for unknown sizes and sizes at the limit",
+    SyncEngine.isTooLargeForAutoSync(nil) == false
+        and SyncEngine.isTooLargeForAutoSync(SyncEngine.LARGE_COLLECTION_SIZE) == false,
+    "Unknown and at-limit sizes should auto-sync")
 
-        local results = SyncEngine.runFullSync({101}, "Smart Collection Sync", nil, {
-            skipLarge = true,
-            knownSizes = {},
-        })
-
-        return sc._loads == 1 and results.sizes["101"] == 1 and #results.skipped == 0
-    end)(),
-    "Unknown size should be synced and recorded")
-
-test("runFullSync without skipLarge syncs large collections",
-    (function()
-        resetMocks()
-        SyncEngine = dofile(pluginDir .. "SyncEngine.lua")
-        local big = trackLoads(createMockCollection("Big", {createMockPhoto(1)}))
-        big.localIdentifier = 101
-        mockSmartCollections = {big}
-
-        local results = SyncEngine.runFullSync({101}, "Smart Collection Sync", nil, {
-            knownSizes = { ["101"] = SyncEngine.LARGE_COLLECTION_SIZE + 1 },
-        })
-
-        return big._loads == 1 and #results.skipped == 0 and results.sizes["101"] == 1
-    end)(),
-    "Manual sync should sync and re-measure large collections")
+test("isTooLargeForAutoSync is true over the limit",
+    SyncEngine.isTooLargeForAutoSync(SyncEngine.LARGE_COLLECTION_SIZE + 1) == true,
+    "Sizes over the limit should be skipped")
 
 test("runFullSync stops when the progress callback returns false",
     (function()
@@ -527,8 +500,7 @@ test("runFullSync stops when the progress callback returns false",
                 return calls < 2 -- allow the first collection, stop before the second
             end)
 
-        return results.canceled == true and sc1._loads == 1 and sc2._loads == 0
-            and results.collectionsProcessed == 1
+        return sc1._loads == 1 and sc2._loads == 0 and results.collectionsProcessed == 1
     end)(),
     "Should stop before the second collection")
 

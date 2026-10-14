@@ -33,4 +33,22 @@ function Preferences.setSelectedIds(ids)
     Preferences.set("selectedCollectionIds", ids)
 end
 
+-- Photo counts from earlier syncs, keyed by tostring(localIdentifier)
+function Preferences.getCollectionSizes()
+    return Preferences.get("collectionSizes") or {}
+end
+
+-- Merge newly measured sizes into the stored ones. Assigns a new table
+-- because LrPrefs only saves values assigned to a top-level key.
+function Preferences.recordCollectionSizes(sizes)
+    local stored = {}
+    for id, size in pairs(Preferences.getCollectionSizes()) do
+        stored[id] = size
+    end
+    for id, size in pairs(sizes) do
+        stored[id] = size
+    end
+    Preferences.set("collectionSizes", stored)
+end
+
 return Preferences

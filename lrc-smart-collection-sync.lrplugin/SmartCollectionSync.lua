@@ -12,19 +12,6 @@ local Preferences = require "Preferences"
 
 local SmartCollectionSync = {}
 
--- Merge sizes measured in a sync into the stored sizes. Assign a new table:
--- LrPrefs only saves values assigned to a top-level key.
-local function recordSizes(sizes)
-    local stored = {}
-    for id, size in pairs(Preferences.get("collectionSizes") or {}) do
-        stored[id] = size
-    end
-    for id, size in pairs(sizes or {}) do
-        stored[id] = size
-    end
-    Preferences.set("collectionSizes", stored)
-end
-
 -- Show configuration dialog
 function SmartCollectionSync.showConfig()
     local result = ConfigDialog.showDialog()
@@ -63,7 +50,7 @@ function SmartCollectionSync.syncNow()
         progress:done()
 
         -- Sync Now syncs large collections too, so it refreshes their sizes
-        recordSizes(results.sizes)
+        Preferences.recordCollectionSizes(results.sizes)
         Preferences.set("lastSyncTime", os.time())
     end)
 end
@@ -78,12 +65,18 @@ function SmartCollectionSync.startBackgroundSync()
 
     Preferences.set("_backgroundSyncRunning", true)
 
-    local function stopRequested()
-        return Preferences.get("_stopRequested") == true
+    -- Checked before each pass and before each collection, so turning
+    -- auto-sync off or quitting stops a pass that is already running
+    local function shouldContinue()
+        return Preferences.get("autoSyncEnabled") and not Preferences.get("_stopRequested")
+    end
+
+    local function notTooLarge(id)
+        return not SyncEngine.isTooLargeForAutoSync(Preferences.getCollectionSizes()[id])
     end
 
     LrTasks.startAsyncTask(function()
-        while Preferences.get("autoSyncEnabled") and not stopRequested() do
+        while shouldContinue() do
             local selectedIds = Preferences.getSelectedIds()
             local destSetName = Preferences.get("destinationSetName")
             local interval = Preferences.get("syncInterval") or 30
@@ -96,9 +89,8 @@ function SmartCollectionSync.startBackgroundSync()
 
             if #selectedIds > 0 and not skipSync then
                 local results = SyncEngine.runFullSync(selectedIds, destSetName,
-                    function() return not stopRequested() end,
-                    { skipLarge = true, knownSizes = Preferences.get("collectionSizes") })
-                recordSizes(results.sizes)
+                    shouldContinue, notTooLarge)
+                Preferences.recordCollectionSizes(results.sizes)
                 Preferences.set("lastSyncTime", os.time())
             end
 

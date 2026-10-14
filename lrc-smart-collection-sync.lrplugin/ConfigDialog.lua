@@ -2,6 +2,7 @@ local LrDialogs = import "LrDialogs"
 local LrView = import "LrView"
 local LrBinding = import "LrBinding"
 local LrFunctionContext = import "LrFunctionContext"
+local LrStringUtils = import "LrStringUtils"
 
 local SyncEngine = require "SyncEngine"
 local Preferences = require "Preferences"
@@ -18,8 +19,7 @@ function ConfigDialog.showDialog()
 
     local smartColls = SyncEngine.getAllSmartCollections()
     local selectedIds = Preferences.getSelectedIds()
-    local sizes = Preferences.get("collectionSizes") or {}
-    local limit = SyncEngine.LARGE_COLLECTION_SIZE
+    local sizes = Preferences.getCollectionSizes()
 
     LrFunctionContext.callWithContext("ConfigDialog", function(context)
         local f = LrView.osFactory()
@@ -47,7 +47,7 @@ function ConfigDialog.showDialog()
             props[propName] = selectedLookup[id] == true
 
             table.insert(checkboxItems, f:checkbox {
-                title = ConfigDialog.getCollectionLabel(sc:getName(), sizes[tostring(id)], limit),
+                title = ConfigDialog.getCollectionLabel(sc:getName(), sizes[tostring(id)]),
                 value = LrView.bind(propName),
             })
         end
@@ -118,7 +118,8 @@ function ConfigDialog.showDialog()
             },
 
             f:static_text {
-                title = "Auto-sync skips collections over " .. ConfigDialog.formatCount(limit)
+                title = "Auto-sync skips collections over "
+                    .. LrStringUtils.numberToStringWithSeparators(SyncEngine.LARGE_COLLECTION_SIZE)
                     .. " photos. Use Sync Now for those.",
             },
 
@@ -177,21 +178,11 @@ function ConfigDialog.showDialog()
     return result
 end
 
--- Format a count with thousands separators: 70561 -> "70,561"
-function ConfigDialog.formatCount(n)
-    local s = tostring(math.floor(n))
-    local formatted
-    repeat
-        s, formatted = s:gsub("^(%d+)(%d%d%d)", "%1,%2")
-    until formatted == 0
-    return s
-end
-
 -- Checkbox label for a smart collection, warning when it is too large to auto-sync.
 -- size is the photo count from the last sync, or nil if never synced.
-function ConfigDialog.getCollectionLabel(name, size, limit)
-    if size and size > limit then
-        return name .. " (" .. ConfigDialog.formatCount(size)
+function ConfigDialog.getCollectionLabel(name, size)
+    if SyncEngine.isTooLargeForAutoSync(size) then
+        return name .. " (" .. LrStringUtils.numberToStringWithSeparators(size)
             .. " photos: too large for auto-sync, use Sync Now)"
     end
     return name
