@@ -12,14 +12,27 @@ local Preferences = require "Preferences"
 
 local SmartCollectionSync = {}
 
+-- Each background loop runs only while the stored generation is its own.
+-- Starting or stopping takes a new generation, so any older loop (including
+-- one left over from before a Plug-in Manager reload) exits at its next check.
+-- Stored in prefs because module state doesn't survive a reload.
+local function newGeneration()
+    local generation = (Preferences.get("_loopGeneration") or 0) + 1
+    Preferences.set("_loopGeneration", generation)
+    return generation
+end
+
 -- Show configuration dialog
 function SmartCollectionSync.showConfig()
+    local wasEnabled = Preferences.get("autoSyncEnabled")
     local result = ConfigDialog.showDialog()
 
-    -- Restart background sync if settings changed
-    if Preferences.get("autoSyncEnabled") then
+    -- A running loop reads the new settings on its next pass, so only a
+    -- change to the auto-sync setting needs a start or stop
+    local isEnabled = Preferences.get("autoSyncEnabled")
+    if isEnabled and not wasEnabled then
         SmartCollectionSync.startBackgroundSync()
-    else
+    elseif wasEnabled and not isEnabled then
         SmartCollectionSync.stopBackgroundSync()
     end
 
@@ -57,18 +70,13 @@ end
 
 -- Start background sync task
 function SmartCollectionSync.startBackgroundSync()
-    -- Use a preference flag to track if background sync is running
-    -- (module-local variables don't persist reliably across reloads)
-    if Preferences.get("_backgroundSyncRunning") then
-        return -- Already running
-    end
-
-    Preferences.set("_backgroundSyncRunning", true)
+    local generation = newGeneration()
 
     -- Checked before each pass and before each collection, so turning
-    -- auto-sync off or quitting stops a pass that is already running
+    -- auto-sync off, reloading or quitting stops a pass that is already running
     local function shouldContinue()
-        return Preferences.get("autoSyncEnabled") and not Preferences.get("_stopRequested")
+        return Preferences.get("autoSyncEnabled")
+            and Preferences.get("_loopGeneration") == generation
     end
 
     local function notTooLarge(id)
@@ -96,33 +104,26 @@ function SmartCollectionSync.startBackgroundSync()
 
             LrTasks.sleep(interval)
         end
-        Preferences.set("_backgroundSyncRunning", false)
     end)
 end
 
--- Stop background sync
+-- Stop background sync; the loop exits at its next check
 function SmartCollectionSync.stopBackgroundSync()
-    Preferences.set("autoSyncEnabled", false)
-    Preferences.set("_backgroundSyncRunning", false)
-    -- Task will exit on next loop iteration
+    newGeneration()
 end
 
 -- Plugin initialization (called on LrInitPlugin)
 function SmartCollectionSync.init()
-    -- Clear stale flags from previous session/crash
-    Preferences.set("_backgroundSyncRunning", false)
-    Preferences.set("_stopRequested", false)
-
     if Preferences.get("autoSyncEnabled") then
         SmartCollectionSync.startBackgroundSync()
     end
 end
 
--- Plugin shutdown (called on LrShutdownPlugin)
--- Stops a running pass at the next collection so quitting isn't held up.
--- Leaves autoSyncEnabled alone so auto-sync resumes on the next launch.
+-- Called when Lightroom quits (LrShutdownApp) and when the plug-in is
+-- unloaded or reloaded (LrShutdownPlugin). Stops a running pass at the next
+-- collection. Leaves autoSyncEnabled alone so auto-sync resumes next launch.
 function SmartCollectionSync.shutdown()
-    Preferences.set("_stopRequested", true)
+    SmartCollectionSync.stopBackgroundSync()
 end
 
 return SmartCollectionSync
