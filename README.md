@@ -58,6 +58,8 @@ Each sync records how many photos each smart collection has. Auto-sync skips any
 
 Splitting a large smart collection into several smaller ones doesn't help: each pass would still load all of their photos.
 
+Mirrors are matched by name. If you rename a large smart collection, auto-sync removes the old mirror but doesn't create the new one, so run **Sync Now** after a rename.
+
 ## How It Works
 
 1. The plugin scans all smart collections in your catalog

@@ -504,6 +504,25 @@ test("runFullSync stops when the progress callback returns false",
     end)(),
     "Should stop before the second collection")
 
+test("runFullSync skips orphan cleanup when stopped early",
+    (function()
+        resetMocks()
+        SyncEngine = dofile(pluginDir .. "SyncEngine.lua")
+        local sc = createMockCollection("Kept", {createMockPhoto(1)})
+        sc.localIdentifier = 101
+        mockSmartCollections = {sc}
+
+        local destSet = createMockCollectionSet("Smart Collection Sync")
+        local orphan = createMockCollection("Orphan", {}, false)
+        destSet:addChild(orphan)
+        mockCollectionSets = {destSet}
+
+        SyncEngine.runFullSync({101}, "Smart Collection Sync", function() return false end)
+
+        return orphan._deleted == false
+    end)(),
+    "A stopped pass should not delete mirrors")
+
 -- ============================================
 -- Test Suite: cleanupOrphanedMirrors
 -- Spec: "When a smart collection is deleted → its mirror collection is also deleted"

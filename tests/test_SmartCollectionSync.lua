@@ -56,6 +56,8 @@ local syncCalls = {}
 local syncResultSizes = {}
 local onSleep = function() end
 local progressCanceled = false
+local onShowDialog = function() end
+local recordedSizes = nil
 
 -- Mock the global import function for LR SDK modules
 _G.import = function(name)
@@ -141,6 +143,7 @@ _G.require = function(name)
         return {
             showDialog = function()
                 dialogShown = true
+                onShowDialog()
                 return showConfigResult
             end,
             getStatusText = function(count) return "Status" end,
@@ -183,10 +186,7 @@ _G.require = function(name)
                 return mockPrefs.collectionSizes or {}
             end,
             recordCollectionSizes = function(sizes)
-                local stored = {}
-                for id, n in pairs(mockPrefs.collectionSizes or {}) do stored[id] = n end
-                for id, n in pairs(sizes) do stored[id] = n end
-                mockPrefs.collectionSizes = stored
+                recordedSizes = sizes
             end,
         }
     end
@@ -205,6 +205,8 @@ local function resetMocks()
     syncResultSizes = {}
     onSleep = function() end
     progressCanceled = false
+    onShowDialog = function() end
+    recordedSizes = nil
 end
 
 -- Load the module under test
@@ -298,18 +300,73 @@ test("shutdown stops the background task without turning auto-sync off", functio
     mockPrefs.autoSyncEnabled = true
     SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
 
+    mockPrefs.selectedCollectionIds = { 101 }
+    SmartCollectionSync.startBackgroundSync()
     SmartCollectionSync.shutdown()
+    asyncTasksStarted[1]()
+
+    assert_eq(#syncCalls, 0, "Loop should exit after shutdown")
     assert_true(mockPrefs.autoSyncEnabled, "Auto-sync setting must survive a restart")
-    assert_true(mockPrefs._stopRequested, "Should request the running task to stop")
 end)
 
-test("init clears a stop request left by the previous session", function()
+test("init after a plugin reload replaces the old loop instead of adding one", function()
     resetMocks()
-    mockPrefs._stopRequested = true
+    mockPrefs.autoSyncEnabled = true
+    mockPrefs.selectedCollectionIds = { 101 }
+    onSleep = function() mockPrefs.autoSyncEnabled = false end -- one pass only
     SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
 
-    SmartCollectionSync.init()
-    assert_eq(mockPrefs._stopRequested, false)
+    SmartCollectionSync.init()          -- first load
+    SmartCollectionSync.shutdown()      -- Plug-in Manager reload unloads...
+    SmartCollectionSync.init()          -- ...and loads again
+    assert_eq(#asyncTasksStarted, 2)
+
+    asyncTasksStarted[1]()              -- old loop wakes up
+    assert_eq(#syncCalls, 0, "Old loop should exit")
+    asyncTasksStarted[2]()              -- new loop
+    assert_eq(#syncCalls, 1, "New loop should sync")
+end)
+
+test("ShutdownApp stops the loop when Lightroom quits and calls done", function()
+    resetMocks()
+    mockPrefs.autoSyncEnabled = true
+    mockPrefs.selectedCollectionIds = { 101 }
+    SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
+    package.loaded.SmartCollectionSync = SmartCollectionSync
+    local app = dofile("lrc-smart-collection-sync.lrplugin/ShutdownApp.lua")
+    package.loaded.SmartCollectionSync = nil
+
+    SmartCollectionSync.startBackgroundSync()
+    local doneCalled = false
+    app.LrShutdownFunction(function() doneCalled = true end, function() return false end)
+    asyncTasksStarted[1]()
+
+    assert_true(doneCalled, "Should call doneFunction")
+    assert_eq(#syncCalls, 0, "Loop should exit after quit")
+end)
+
+-- ============================================================================
+-- Tests for showConfig() starting and stopping auto-sync
+-- Only a change to the auto-sync setting starts or stops the loop
+-- ============================================================================
+
+test("showConfig does not start another loop when auto-sync stays on", function()
+    resetMocks()
+    mockPrefs.autoSyncEnabled = true
+    SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
+
+    SmartCollectionSync.showConfig()
+    assert_eq(#asyncTasksStarted, 0)
+end)
+
+test("showConfig starts the loop when auto-sync is turned on", function()
+    resetMocks()
+    mockPrefs.autoSyncEnabled = false
+    onShowDialog = function() mockPrefs.autoSyncEnabled = true end
+    SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
+
+    SmartCollectionSync.showConfig()
+    assert_eq(#asyncTasksStarted, 1)
 end)
 
 -- ============================================================================
@@ -333,8 +390,7 @@ test("background pass skips large collections and records sizes", function()
     assert_eq(#syncCalls, 1, "Should run one sync pass")
     assert_false(syncCalls[1].shouldSync("202"), "Background pass should skip large collections")
     assert_true(syncCalls[1].shouldSync("101"), "Unknown sizes should sync")
-    assert_eq(mockPrefs.collectionSizes["101"], 12, "Should record new size")
-    assert_eq(mockPrefs.collectionSizes["202"], 50000, "Should keep existing sizes")
+    assert_eq(recordedSizes, syncResultSizes, "Should record the sizes from the pass")
 end)
 
 test("background pass stops when shutdown is requested", function()
@@ -394,7 +450,7 @@ test("syncNow syncs large collections too and records sizes", function()
 
     assert_eq(#syncCalls, 1)
     assert_eq(syncCalls[1].shouldSync, nil, "Sync Now should not skip large collections")
-    assert_eq(mockPrefs.collectionSizes["101"], 9000, "Should refresh the recorded size")
+    assert_eq(recordedSizes, syncResultSizes, "Should record the refreshed sizes")
 end)
 
 test("syncNow progress callback returns false when Cancel is clicked", function()
@@ -431,13 +487,16 @@ end)
 -- Spec: Sync can be paused without losing configuration
 -- ============================================================================
 
-test("stopBackgroundSync sets autoSyncEnabled to false", function()
+test("stopBackgroundSync stops a running loop", function()
     resetMocks()
     mockPrefs.autoSyncEnabled = true
+    mockPrefs.selectedCollectionIds = { 101 }
     SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
 
+    SmartCollectionSync.startBackgroundSync()
     SmartCollectionSync.stopBackgroundSync()
-    assert_false(mockPrefs.autoSyncEnabled, "Should disable auto-sync flag")
+    asyncTasksStarted[1]()
+    assert_eq(#syncCalls, 0, "Loop should exit")
 end)
 
 -- ============================================================================
