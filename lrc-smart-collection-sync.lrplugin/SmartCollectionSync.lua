@@ -73,7 +73,7 @@ function SmartCollectionSync.startBackgroundSync()
     local generation = newGeneration()
 
     -- Checked before each pass and before each collection, so turning
-    -- auto-sync off, reloading or quitting stops a pass that is already running
+    -- auto-sync off or reloading stops a pass that is already running
     local function shouldContinue()
         return Preferences.get("autoSyncEnabled")
             and Preferences.get("_loopGeneration") == generation
@@ -119,9 +119,10 @@ function SmartCollectionSync.init()
     end
 end
 
--- Called when Lightroom quits (LrShutdownApp) and when the plug-in is
--- unloaded or reloaded (LrShutdownPlugin). Stops a running pass at the next
--- collection. Leaves autoSyncEnabled alone so auto-sync resumes next launch.
+-- Called when the plug-in is unloaded or reloaded (LrShutdownPlugin). Stops
+-- a running pass at the next collection. Leaves autoSyncEnabled alone so
+-- auto-sync resumes after a reload. No LrShutdownApp hook: tasks die at quit
+-- anyway.
 function SmartCollectionSync.shutdown()
     SmartCollectionSync.stopBackgroundSync()
 end

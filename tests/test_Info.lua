@@ -91,10 +91,6 @@ test("Plugin defines LrInitPlugin",
     Info.LrInitPlugin ~= nil,
     "LrInitPlugin is missing (needed for auto-sync resume)")
 
-test("Plugin defines LrShutdownApp (runs when Lightroom quits)",
-    Info.LrShutdownApp ~= nil,
-    "LrShutdownApp is missing (LrShutdownPlugin only runs on Plug-in Manager unload)")
-
 test("Plugin defines LrShutdownPlugin",
     Info.LrShutdownPlugin ~= nil,
     "LrShutdownPlugin is missing (needed for cleanup)")

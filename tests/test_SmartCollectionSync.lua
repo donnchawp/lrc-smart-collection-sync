@@ -327,24 +327,6 @@ test("init after a plugin reload replaces the old loop instead of adding one", f
     assert_eq(#syncCalls, 1, "New loop should sync")
 end)
 
-test("ShutdownApp stops the loop when Lightroom quits and calls done", function()
-    resetMocks()
-    mockPrefs.autoSyncEnabled = true
-    mockPrefs.selectedCollectionIds = { 101 }
-    SmartCollectionSync = dofile("lrc-smart-collection-sync.lrplugin/SmartCollectionSync.lua")
-    package.loaded.SmartCollectionSync = SmartCollectionSync
-    local app = dofile("lrc-smart-collection-sync.lrplugin/ShutdownApp.lua")
-    package.loaded.SmartCollectionSync = nil
-
-    SmartCollectionSync.startBackgroundSync()
-    local doneCalled = false
-    app.LrShutdownFunction(function() doneCalled = true end, function() return false end)
-    asyncTasksStarted[1]()
-
-    assert_true(doneCalled, "Should call doneFunction")
-    assert_eq(#syncCalls, 0, "Loop should exit after quit")
-end)
-
 -- ============================================================================
 -- Tests for showConfig() starting and stopping auto-sync
 -- Only a change to the auto-sync setting starts or stops the loop
